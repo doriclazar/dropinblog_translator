@@ -1,7 +1,7 @@
+import logging
 import requests
-import html
 from urllib.parse import quote, unquote
-
+from unidecode import unidecode
 from bs4 import BeautifulSoup
 
 class Translator:
@@ -30,57 +30,70 @@ class Translator:
             'x-dos-behavior': 'Embed',
         }
 
-    def translate_dashed(self, string, language_abbreviation):
-        separated_string = str(string).replace('-', '')
+    def translate_dashed(self, string, language_abbreviation, romanize=False, uni=False):
+        separated_string = str(string).replace('-', ' ')
         parsed_string =  quote(separated_string, safe='/', encoding=None, errors=None)
         data = (
             f'async=translate,sl:auto,tl:{language_abbreviation},st:{parsed_string},id:0000000000030,qc:true,ac:false,_id:tw-async-translate,_pms:s,_fmt:pc')
         response = requests.post('https://www.google.com/async/translate', headers=self.headers, data=data)
         translation = BeautifulSoup(response.content, 'lxml')
         translated_string = translation.find('span', {'id': 'tw-answ-target-text'}).text
-        return translated_string.replace(' ', '-')
+        if romanize:
+            try:
+                romanization_string = translation.find('span', {'id': 'tw-answ-romanization'}).text
+                if romanization_string.replace(' ', ''):
+                    translated_string = romanization_string
+            except Exception as ex:
+                logging.error(ex)
+            if uni:
+                translated_string = unidecode(translated_string)
 
-    def translate_string(self, string, language_abbreviation):
+        return translated_string.replace(' ', '-').replace("'", '').replace('@', '')
+
+    def translate_string(self, string, language_abbreviation, romanize=False):
         parsed_string = quote(string, safe='/', encoding=None, errors=None)
         data = (
             f'async=translate,sl:auto,tl:{language_abbreviation},st:{parsed_string},id:0000000000030,qc:true,ac:false,_id:tw-async-translate,_pms:s,_fmt:pc')
         response = requests.post('https://www.google.com/async/translate', headers=self.headers, data=data)
         translation = BeautifulSoup(response.content, 'lxml')
         translated_string = translation.find('span', {'id': 'tw-answ-target-text'}).text
-        return translated_string
+        if romanize:
+            try:
+                romanization_string = translation.find('span', {'id': 'tw-answ-romanization'}).text
+                if romanization_string.replace(' ', ''):
+                    translated_string = romanization_string
+            except Exception as ex:
+                logging.error(ex)
+        return translated_string.replace("'", '').replace('@', '')
 
     def _write_to_file(self, post_code):
         with open('finito_fr.html', 'w', encoding='utf-8') as translation_file:
             translation_file.write(post_code.prettify(formatter=None))
-            # translation_file.write(str(post_code))
-            # translation_file.write(html.unescape(str(post_code.encode('utf-8'))))
 
     def translate_content(self, post_code, language_abbreviation):
-        for element in post_code.find_all(['h3', 'h4', 'li', 'h1', 'h2', 'p']):
-            # if element.text.count('>') > 3:
+        for element in post_code.find_all(['h1', 'h2', 'h3', 'h4', 'li', 'p', 'a', 'link']):
             if '<img' in str(element):
                 continue
             string_slice = quote(element.text, safe='/', encoding=None, errors=None)
             data = (f'async=translate,sl:auto,tl:{language_abbreviation},st:{string_slice},id:0000000000030,qc:true,ac:false,_id:tw-async-translate,_pms:s,_fmt:pc')
             response = requests.post('https://www.google.com/async/translate', headers=self.headers, data=data)
-            # response.encoding = 'UTF-8'
             translation = BeautifulSoup(response.text, 'lxml')
             translation_string = translation.find('span', {'id': 'tw-answ-target-text'}).text
-            # if '   ' in translation_string:
-                # translation_string = translation.find('span', {'id': 'tw-answ-romanization'}).text
-
-            # translation_string = translation_string.encode('ascii', 'ignore').decode('utf-8')
-            # try:
-                # print(translation_string)
-            # except UnicodeEncodeError:
-                # translation_string = translation_string.encode('ascii', 'ignore').decode('utf-8')
-                # print(translation_string)
-
-
-            # new_element = str(tag_open + translation_string + tag_close)
-            # element.replace_with(new_element)
             element.string = translation_string
-            # print(element)
 
-        # self._write_to_file(post_code)
+        for element in post_code.find_all('img'):
+            cur_location, cur_name = element.attrs['data-lazy-load'].rsplit('/', 1)
+            extension = '.' + cur_name.split('.')[-1].lower()
+            translated_name = self.translate_dashed(cur_name.replace(extension, ''), language_abbreviation, romanize=True, uni=True).replace('|', '')
+
+            img_data = requests.get(element.attrs['data-lazy-load']).content
+            translated_path = 'data/' + translated_name + extension
+            with open(translated_path, 'wb') as handler:
+                handler.write(img_data)
+
+            element.attrs['src'] = cur_location + '/' + translated_name + extension
+
+        post_code.find('html').unwrap()
+        post_code.find('body').unwrap()
+
         return post_code
